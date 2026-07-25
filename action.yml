@@ -1,7 +1,5 @@
 name: "soliconfig config/secrets"
-description: >-
-  Pull soliconfig config and secrets at CI/build time and expose them to later
-  steps ($GITHUB_ENV), a file, or a step output — with automatic log masking.
+description: "Pull soliconfig config & secrets at CI time into $GITHUB_ENV, a file, or a step output, with automatic log masking."
 author: "soliconfig"
 branding:
   icon: "lock"
