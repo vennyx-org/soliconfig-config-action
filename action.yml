@@ -1,0 +1,149 @@
+name: "soliconfig config/secrets"
+description: >-
+  Pull soliconfig config and secrets at CI/build time and expose them to later
+  steps ($GITHUB_ENV), a file, or a step output — with automatic log masking.
+author: "soliconfig"
+branding:
+  icon: "lock"
+  color: "purple"
+
+inputs:
+  api-key:
+    description: >-
+      Environment-scoped soliconfig API key (sc_...). Store it as a repository
+      or organization secret and pass it as secrets.SOLICONFIG_API_KEY.
+    required: true
+  org:
+    description: >-
+      Organization slug. Informational only — the target org/project/environment
+      is encoded in the API key and resolved server-side. Provided for clarity in
+      workflow logs; it is NOT sent to the CLI.
+    required: false
+    default: ""
+  project:
+    description: >-
+      Project slug. Informational only (see `org`). Resolved from the API key.
+    required: false
+    default: ""
+  environment:
+    description: >-
+      Environment name. Informational only (see `org`). Resolved from the API key.
+    required: false
+    default: ""
+  private-key:
+    description: >-
+      Optional DOTENV private key (dotenvx-style) used to decrypt values locally.
+      When set, the action runs `pull --decrypt`. Leave empty to receive values as
+      stored (`encrypted:`-prefixed) — e.g. when your environment decrypts
+      server-side. Store it as a secret.
+    required: false
+    default: ""
+  format:
+    description: >-
+      Output format for `output-file` and the step summary: `dotenv` (KEY="value",
+      quoted/escaped .env style), `env` (KEY=value, raw), or `json` (a JSON object).
+      Does not affect $GITHUB_ENV export, which is always real KEY/VALUE pairs.
+    required: false
+    default: "dotenv"
+  output-file:
+    description: >-
+      Optional path to write the pulled values to, rendered in `format`. The file
+      is created relative to the workspace. Leave empty to skip file output.
+    required: false
+    default: ""
+  export-env:
+    description: >-
+      When `true` (default), append each KEY=VALUE to $GITHUB_ENV so later steps
+      in the job can read them as environment variables.
+    required: false
+    default: "true"
+  mask:
+    description: >-
+      When `true` (default), register every value with `::add-mask::` so it is
+      redacted from subsequent workflow logs.
+    required: false
+    default: "true"
+  api-url:
+    description: >-
+      Optional override for the soliconfig API base URL (defaults to the CLI's
+      built-in production endpoint).
+    required: false
+    default: ""
+  cli-version:
+    description: >-
+      npm dist-tag or version of the `@vennyx/soliconfig-cli` package to run via
+      bunx (default `latest`). Pin it (e.g. `0.1.0`) for reproducible builds.
+    required: false
+    default: "latest"
+
+outputs:
+  env-file:
+    description: "Absolute path to the raw .env file produced by `soliconfig pull`."
+    value: ${{ steps.pull.outputs.env-file }}
+  count:
+    description: "Number of config/secret keys emitted (excludes dotenv key headers)."
+    value: ${{ steps.emit.outputs.count }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: setup-bun
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v bun >/dev/null 2>&1; then
+          echo "bun already available: $(bun --version)"
+        else
+          echo "installing bun (required to run the soliconfig CLI)..."
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.bun/bin:$PATH"
+          echo "installed bun: $(bun --version)"
+        fi
+
+    - id: pull
+      shell: bash
+      env:
+        SOLICONFIG_TOKEN: ${{ inputs.api-key }}
+        SC_PRIVATE_KEY: ${{ inputs.private-key }}
+        SC_API_URL: ${{ inputs.api-url }}
+        SC_CLI_VERSION: ${{ inputs.cli-version }}
+      run: |
+        set -euo pipefail
+        export PATH="$HOME/.bun/bin:$PATH"
+
+        if [ -z "${SOLICONFIG_TOKEN:-}" ]; then
+          echo "::error::api-key is required (pass secrets.SOLICONFIG_API_KEY)."
+          exit 1
+        fi
+
+        tmp_dir="${RUNNER_TEMP:-$(mktemp -d)}"
+        ENV_FILE="${tmp_dir}/soliconfig-$(date +%s%N).env"
+
+        # The API key is environment-scoped; org/project/environment are resolved
+        # server-side (GET /v1/agent/env), so they are not passed as flags.
+        args=(pull -f "$ENV_FILE")
+        if [ -n "${SC_API_URL:-}" ]; then
+          args+=(--api-url "$SC_API_URL")
+        fi
+        if [ -n "${SC_PRIVATE_KEY:-}" ]; then
+          args+=(--decrypt --private-key "$SC_PRIVATE_KEY")
+        fi
+
+        echo "running: soliconfig pull (version ${SC_CLI_VERSION})"
+        bunx "@vennyx/soliconfig-cli@${SC_CLI_VERSION}" "${args[@]}"
+
+        echo "env-file=${ENV_FILE}" >> "$GITHUB_OUTPUT"
+
+    - id: emit
+      shell: bash
+      env:
+        INPUT_ENV_FILE: ${{ steps.pull.outputs.env-file }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
+        INPUT_EXPORT_ENV: ${{ inputs.export-env }}
+        INPUT_MASK: ${{ inputs.mask }}
+      run: |
+        set -euo pipefail
+        export PATH="$HOME/.bun/bin:$PATH"
+        bun run "${GITHUB_ACTION_PATH}/scripts/emit.ts"

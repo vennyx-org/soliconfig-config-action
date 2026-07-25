@@ -1,0 +1,45 @@
+# Example workflow using the soliconfig config/secrets action.
+# Copy into .github/workflows/ in your repository and adjust to taste.
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1) Simplest case: server-side-decrypted env, exported to later steps.
+      - name: Load soliconfig config/secrets
+        id: soliconfig
+        uses: vennyx-org/soliconfig-config-action@v1
+        with:
+          api-key: ${{ secrets.SOLICONFIG_API_KEY }}
+          # org/project/environment are resolved from the API key (informational):
+          org: acme
+          project: web
+          environment: production
+          # export-env: "true"   # (default) -> values land in $GITHUB_ENV
+          # mask: "true"         # (default) -> values are ::add-mask::'d
+
+      - name: Values are available as environment variables
+        run: |
+          echo "loaded ${{ steps.soliconfig.outputs.count }} keys"
+          # e.g. these come from soliconfig, masked in logs:
+          node -e "console.log('has DATABASE_URL:', Boolean(process.env.DATABASE_URL))"
+          npm ci
+          npm run build
+
+      # 2) Alternative: local decryption + write a JSON file, no $GITHUB_ENV.
+      - name: Load soliconfig config to a file
+        uses: vennyx-org/soliconfig-config-action@v1
+        with:
+          api-key: ${{ secrets.SOLICONFIG_API_KEY }}
+          private-key: ${{ secrets.SOLICONFIG_PRIVATE_KEY }}
+          export-env: "false"
+          format: json
+          output-file: config.json
